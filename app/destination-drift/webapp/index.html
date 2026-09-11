@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>BTP Destination Drift Monitor</title>
+  <style>
+    html, body { height: 100%; margin: 0; }
+    /* UI5 assigns the app's wrapper div a generated id at runtime but keeps this data-id
+       attribute, so this selector reaches it precisely — unlike a broad "body > div" rule,
+       it never also matches popups (MessageToast, Dialog, ...) that get appended to body later. */
+    body > div[data-id="container"], #container, #container-uiarea { height: 100%; }
+  </style>
+  <script
+    id="sap-ui-bootstrap"
+    src="https://ui5.sap.com/resources/sap-ui-core.js"
+    data-sap-ui-theme="sap_horizon"
+    data-sap-ui-resource-roots='{"btp.drift.destinationdrift": "./"}'
+    data-sap-ui-onInit="module:btp/drift/destinationdrift/index"
+    data-sap-ui-compat-version="edge"
+    data-sap-ui-async="true"
+    data-sap-ui-frame-options="trusted">
+  </script>
+</head>
+<body class="sapUiBody" id="content">
+  <div
+    data-sap-ui-component
+    data-name="btp.drift.destinationdrift"
+    data-id="container"
+    data-settings='{"id" : "btp.drift.destinationdrift"}'
+    data-handle-validation="true">
+  </div>
+</body>
+</html>

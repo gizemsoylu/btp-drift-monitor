@@ -1,0 +1,154 @@
+<mvc:View
+  xmlns:mvc="sap.ui.core.mvc"
+  xmlns="sap.m"
+  xmlns:core="sap.ui.core"
+  xmlns:f="sap.f"
+  xmlns:card="sap.f.cards"
+  controllerName="btp.drift.destinationdrift.controller.Compare"
+  displayBlock="true"
+  height="100%">
+  <Page showHeader="false">
+    <content>
+      <f:ShellBar
+        title="{i18n>appTitle}"
+        homeIcon="sap-icon://compare"
+        showSearch="false"
+        showNotifications="false">
+        <f:profile>
+          <f:Avatar displayShape="Circle" src="sap-icon://user-placeholder" />
+        </f:profile>
+      </f:ShellBar>
+
+      <Toolbar visible="{= ${wizard>/step} === 'ready' }" class="sapUiResponsiveMargin">
+        <Breadcrumbs currentLocationText="{wizard>/globalAccountName}">
+          <Link text="{i18n>appTitle}" />
+        </Breadcrumbs>
+        <ToolbarSpacer />
+        <core:Icon src="sap-icon://sys-enter-2" color="Positive" tooltip="{i18n>btpLoginSuccess}" class="sapUiTinyMarginEnd" />
+        <Button text="{i18n>switchGlobalAccountButtonText}" icon="sap-icon://synchronize" type="Transparent" press="onSwitchGlobalAccountPress" />
+        <Button text="{i18n>logoutButtonText}" icon="sap-icon://log" type="Transparent" press="onLogoutPress" />
+      </Toolbar>
+
+      <VBox>
+        <Title text="{i18n>compareTitle}" level="H2" class="sapUiResponsiveMargin sapUiTinyMarginBottom" />
+        <Text text="{i18n>compareSubtitle}" class="sapUiResponsiveMargin sapUiSmallMarginBottom" />
+
+        <!-- Step 1: login (skipped automatically if a btp CLI session is already active) -->
+            <f:Card class="sapUiResponsiveMargin" visible="{= ${wizard>/step} === 'login' }">
+              <f:header>
+                <card:Header title="{i18n>btpLoginButtonText}" />
+              </f:header>
+              <f:content>
+                <VBox class="sapUiSmallMargin">
+                  <Label text="{i18n>subdomainLabel}" labelFor="loginSubdomainInput" />
+                  <Input id="loginSubdomainInput" value="{wizard>/subdomain}" placeholder="{i18n>subdomainPlaceholder}" width="20rem" class="sapUiSmallMarginBottom" />
+                  <Button
+                    text="{i18n>btpLoginButtonText}"
+                    type="Emphasized"
+                    enabled="{= ${wizard>/loginStatus} !== 'running'}"
+                    press="onLoginPress" />
+                  <Text text="{wizard>/loginStatusText}" class="sapUiSmallMarginTop" />
+                  <BusyIndicator visible="{= ${wizard>/loginStatus} === 'running'}" class="sapUiSmallMarginTop" />
+                  <Link
+                    text="{i18n>btpLoginOpenSsoLink}"
+                    href="{wizard>/ssoUrl}"
+                    target="_blank"
+                    visible="{= !!${wizard>/ssoUrl} }"
+                    class="sapUiTinyMarginTop" />
+                </VBox>
+              </f:content>
+            </f:Card>
+
+            <!-- Step 2: pick subaccounts — provisioning + comparison happen live, same card -->
+            <f:Card class="sapUiResponsiveMargin" visible="{= ${wizard>/step} === 'ready' }">
+              <f:header>
+                <card:Header title="{i18n>compareSelectLabel}" />
+              </f:header>
+              <f:content>
+                <VBox class="sapUiSmallMargin">
+                  <MultiComboBox
+                    id="compareSubaccountSelect"
+                    items="{wizard>/subaccounts}"
+                    selectionChange="onSubaccountSelectionChange"
+                    width="100%">
+                    <core:Item key="{wizard>id}" text="{wizard>displayName}" />
+                  </MultiComboBox>
+
+                  <BusyIndicator visible="{wizard>/provisioning}" class="sapUiSmallMarginTop" />
+                  <Text
+                    visible="{wizard>/provisioning}"
+                    text="{wizard>/provisioningStatusText}"
+                    class="sapUiTinyMarginTop" />
+
+                  <MessageStrip
+                    visible="{= !${compare>/hasSelection} &amp;&amp; !${wizard>/provisioning} }"
+                    text="{i18n>compareNoSelection}"
+                    type="Information"
+                    showIcon="true"
+                    class="sapUiSmallMarginTop" />
+                </VBox>
+              </f:content>
+            </f:Card>
+
+            <!-- Step 3: comparison results, tabbed -->
+            <f:Card class="sapUiResponsiveMargin" visible="{= ${compare>/hasSelection} }">
+              <f:content>
+                <IconTabBar id="resultsTabBar" expandable="false">
+                  <items>
+                    <IconTabFilter key="destinations" text="{i18n>tabDestinations}" icon="sap-icon://chain-link">
+                      <VBox class="sapUiSmallMargin">
+                        <OverflowToolbar>
+                          <core:Icon src="sap-icon://sys-enter-2" color="Positive" class="sapUiTinyMarginEnd" />
+                          <Text text="{i18n>compareLegendMatch}" class="sapUiSmallMarginEnd" />
+                          <core:Icon src="sap-icon://message-warning" color="Critical" class="sapUiTinyMarginEnd" />
+                          <Text text="{i18n>compareLegendDrift}" class="sapUiSmallMarginEnd" />
+                          <core:Icon src="sap-icon://less" color="Neutral" class="sapUiTinyMarginEnd" />
+                          <Text text="{i18n>compareLegendMissingTransport}" />
+                          <ToolbarSpacer />
+                          <Button icon="sap-icon://refresh" tooltip="{i18n>refreshButtonText}" type="Transparent" press="onRefreshPress" />
+                        </OverflowToolbar>
+                        <!-- Columns and row items are built in the controller (column count is dynamic, one per selected subaccount). -->
+                        <Table id="compareTable" noDataText="{i18n>compareEmptyState}" class="sapUiSmallMarginEnd" />
+                      </VBox>
+                    </IconTabFilter>
+                    <IconTabFilter key="instances" text="{i18n>tabInstances}" icon="sap-icon://database">
+                      <VBox class="sapUiSmallMargin">
+                        <OverflowToolbar>
+                          <core:Icon src="sap-icon://sys-enter-2" color="Positive" class="sapUiTinyMarginEnd" />
+                          <Text text="{i18n>compareLegendMatch}" class="sapUiSmallMarginEnd" />
+                          <core:Icon src="sap-icon://message-warning" color="Critical" class="sapUiTinyMarginEnd" />
+                          <Text text="{i18n>compareLegendDrift}" class="sapUiSmallMarginEnd" />
+                          <core:Icon src="sap-icon://less" color="Neutral" class="sapUiTinyMarginEnd" />
+                          <Text text="{i18n>compareLegendMissing}" />
+                          <ToolbarSpacer />
+                          <Button icon="sap-icon://refresh" tooltip="{i18n>refreshButtonText}" type="Transparent" press="onRefreshPress" />
+                        </OverflowToolbar>
+                        <Table id="instancesTable" noDataText="{i18n>compareEmptyState}" class="sapUiSmallMarginEnd" />
+                      </VBox>
+                    </IconTabFilter>
+                  </items>
+                </IconTabBar>
+              </f:content>
+            </f:Card>
+
+      </VBox>
+    </content>
+  </Page>
+
+  <!-- Shown when the btp CLI login is ambiguous ("Choose a global account>") — mirrors the SAP BTP Cockpit's own global account picker. -->
+  <Dialog id="globalAccountDialog" title="{i18n>btpChooseGlobalAccountTitle}" contentWidth="28rem" contentHeight="28rem">
+    <content>
+      <VBox class="sapUiSmallMargin">
+        <SearchField id="globalAccountSearch" liveChange="onGlobalAccountSearch" class="sapUiSmallMarginBottom" />
+        <List id="globalAccountList" items="{wizard>/globalAccounts}" mode="None">
+          <StandardListItem
+            title="{wizard>name}"
+            icon="sap-icon://building"
+            iconInset="false"
+            type="Active"
+            press="onGlobalAccountPress" />
+        </List>
+      </VBox>
+    </content>
+  </Dialog>
+</mvc:View>

@@ -1,0 +1,48 @@
+{
+  "name": "btp-drift-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Compares Destination Service configuration across SAP BTP subaccounts and transports destinations between them",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build:app": "node scripts/build-ui5-ts.js",
+    "prestart": "npm run build:app",
+    "start": "cds-serve",
+    "prewatch": "npm run build:app",
+    "watch": "cds watch",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p app/destination-drift/tsconfig.json"
+  },
+  "dependencies": {
+    "@sap/cds": "^10.1.0",
+    "@sap/xssec": "^4.3.1",
+    "axios": "^1.7.9",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.29.7",
+    "@babel/preset-typescript": "^7.29.7",
+    "@cap-js/sqlite": "^3.1.0",
+    "@sap/cds-dk": "^10.1.0",
+    "@sap/ux-specification": "^1.144.11",
+    "@sapui5/ts-types-esm": "1.148.1",
+    "@types/node": "^22.20.2",
+    "babel-preset-transform-ui5": "^7.10.0",
+    "cds-plugin-ui5": "^0.17.4",
+    "typescript": "^7.0.2"
+  },
+  "cds": {
+    "requires": {
+      "db": {
+        "kind": "sqlite",
+        "credentials": {
+          "url": "db.sqlite"
+        }
+      },
+      "auth": {
+        "kind": "dummy"
+      }
+    }
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "welcomeFile": "/destination-drift/webapp/index.html",
+  "authenticationMethod": "none",
+  "routes": [
+    {
+      "source": "^/(.*)$",
+      "target": "$1",
+      "destination": "backend",
+      "authenticationType": "none"
+    }
+  ]
+}

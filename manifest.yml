@@ -1,0 +1,32 @@
+# Standalone deployment (no XSUAA / destination service binding — both apps are public).
+# Target: org NdbsAiSbx / space dev, eu10-005.
+applications:
+  - name: btp-drift-monitor-srv
+    path: .
+    buildpacks:
+      - nodejs_buildpack
+    command: chmod +x bin/btp && npm run build:app && npx cds-serve
+    memory: 512M
+    disk_quota: 1024M
+    instances: 1
+    routes:
+      - route: btp-drift-monitor-srv.cfapps.eu10-005.hana.ondemand.com
+    env:
+      # The nodejs_buildpack sets NPM_CONFIG_PRODUCTION=true itself regardless of manifest env,
+      # which strips devDependencies — override it: we need typescript/babel/@sap/cds-dk at
+      # startup (npm run build:app, cds-serve).
+      NPM_CONFIG_PRODUCTION: "false"
+      BTP_CLI_PATH: ./bin/btp
+
+  - name: btp-drift-monitor
+    path: approuter
+    buildpacks:
+      - nodejs_buildpack
+    memory: 128M
+    disk_quota: 256M
+    instances: 1
+    routes:
+      - route: btp-drift-monitor.cfapps.eu10-005.hana.ondemand.com
+    env:
+      destinations: >
+        [{"name":"backend","url":"https://btp-drift-monitor-srv.cfapps.eu10-005.hana.ondemand.com","forwardAuthToken":false}]

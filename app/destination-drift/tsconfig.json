@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM"],
+    "skipLibCheck": true,
+    "allowJs": true,
+    "strict": true,
+    "noImplicitAny": false,
+    "types": ["@sapui5/ts-types-esm"]
+  },
+  "include": ["webapp/**/*.ts"]
+}

@@ -1,0 +1,17 @@
+node_modules/
+gen/
+dist/
+.env
+subaccounts.json
+logs/
+*.log
+*.sqlite
+*.sqlite-*
+
+# Compiled from the .ts sources (app/destination-drift/webapp/**/*.ts) by
+# `npm run build:app` — regenerated automatically on `npm start` / `npm run watch`.
+app/destination-drift/webapp/**/*.js
+
+# btp CLI Linux binary vendored for `cf push` (see manifest.yml) — not committed (large binary,
+# EULA-gated download). Each deployer downloads it once per README instructions.
+bin/
