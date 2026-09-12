@@ -1,12 +1,22 @@
-import type { Subaccount } from "./lib/types.cts";
+import type { Subaccount, FetchDestinationsResult } from "./lib/types.cts";
+import type { InstanceKey } from "./lib/config.cts";
 const cds = require("@sap/cds");
-const { loadSubaccounts } = require("./lib/config.cts");
-const { fetchAllDestinations, hasMaskedSensitiveField, pushDestination } = require("./lib/destination-client.cts");
+const { loadSubaccounts, loadInstanceKey, loadInstanceKeysForLabels } = require("./lib/config.cts");
+const {
+  fetchAllDestinations,
+  fetchDestinations,
+  fetchInstanceDestinations,
+  fetchAllInstanceDestinations,
+  hasMaskedSensitiveField,
+  pushDestination,
+  pushInstanceDestination,
+} = require("./lib/destination-client.cts");
 const { buildDriftRows } = require("./lib/drift.cts");
 const btpCli = require("./lib/btp-cli.cts");
 const { getSessionId } = require("./lib/session.cts");
 
 const DbSubaccounts = "btp.drift.Subaccounts";
+const DbInstanceKeys = "btp.drift.DestinationServiceInstanceKeys";
 const DbTransportLog = "btp.drift.TransportLog"; // write directly to the DB entity to bypass @readonly on the service projection
 
 interface RawHttpRequest {
@@ -163,8 +173,20 @@ module.exports = cds.service.impl(async function (this: any) {
       subaccounts = subaccounts.filter((s: Subaccount) => requestedLabels.includes(s.label));
     }
 
-    const results = await fetchAllDestinations(subaccounts);
-    const rows: DriftRowOut[] = buildDriftRows(results);
+    const results: FetchDestinationsResult[] = await fetchAllDestinations(subaccounts);
+
+    // Instance-scoped destinations: every "destination"-offering service instance (other than our
+    // own monitoring one) found in these subaccounts also gets its own instance-scoped comparison,
+    // so a destination only visible to apps bound to a specific instance isn't missed.
+    const instanceKeys: InstanceKey[] = await loadInstanceKeysForLabels(
+      sessionId,
+      subaccounts.map((s: Subaccount) => s.label)
+    );
+    const instanceResults: FetchDestinationsResult[] = await fetchAllInstanceDestinations(
+      instanceKeys.map((k) => ({ label: k.label, instanceName: k.instanceName, creds: k }))
+    );
+
+    const rows: DriftRowOut[] = buildDriftRows([...results, ...instanceResults]);
     return rows.map((r) => ({ ...r, driftCriticality: r.hasDrift ? 1 : 3 })); // 1=Negative(red), 3=Positive(green)
   });
 
@@ -177,19 +199,23 @@ module.exports = cds.service.impl(async function (this: any) {
 
   interface TransportRequestData {
     destinationName: string;
+    /** Set when the destination is instance-scoped (belongs to one Destination service instance) rather than subaccount-wide. */
+    instanceName?: string;
     sourceSubaccount: string;
     targetSubaccount: string;
+    /** The target's real BTP subaccount id (GUID) — only needed when instanceName's instance must be auto-provisioned at the target. */
+    targetSubaccountId?: string;
     confirmed: boolean;
   }
 
   this.on("transportDestination", async (req: CdsRequest<TransportRequestData>) => {
     const sessionId = sessionIdFrom(req);
-    const { destinationName, sourceSubaccount, targetSubaccount, confirmed } = req.data;
+    const { destinationName, instanceName, sourceSubaccount, targetSubaccount, targetSubaccountId, confirmed } = req.data;
     const subaccounts = await loadSubaccounts(sessionId);
-    const source = findSubaccount(subaccounts, sourceSubaccount);
-    const target = findSubaccount(subaccounts, targetSubaccount);
+    const sourceRegistered = findSubaccount(subaccounts, sourceSubaccount);
+    const targetRegistered = findSubaccount(subaccounts, targetSubaccount);
 
-    if (!source || !target) {
+    if (!sourceRegistered || !targetRegistered) {
       req.error(400, "Invalid source or target subaccount.");
       return;
     }
@@ -197,22 +223,59 @@ module.exports = cds.service.impl(async function (this: any) {
       req.error(400, "Source and target subaccount cannot be the same.");
       return;
     }
-
-    const sourceResult = await fetchAllDestinations([source]);
-    const dest = sourceResult[0].destinations.find((d: { Name: string }) => d.Name === destinationName);
-    if (!dest) {
-      req.error(404, `"${destinationName}" was not found in the source subaccount.`);
-      return;
-    }
-
     if (!confirmed) {
       req.error(400, "Transport requires confirmation (confirmed:true).");
       return;
     }
 
+    let source: Subaccount = sourceRegistered;
+    let target: Subaccount = targetRegistered;
+    let fetchOne: (creds: Subaccount) => Promise<{ destinations: { Name: string }[] }>;
+    let pushOne: (creds: Subaccount, dest: { Name: string }) => Promise<void>;
+
+    if (instanceName) {
+      const sourceInstance = await loadInstanceKey(sessionId, sourceSubaccount, instanceName);
+      if (!sourceInstance) {
+        req.error(404, `Destination service instance "${instanceName}" was not found for "${sourceSubaccount}".`);
+        return;
+      }
+      source = sourceInstance;
+
+      let targetInstance = await loadInstanceKey(sessionId, targetSubaccount, instanceName);
+      if (!targetInstance) {
+        if (!targetSubaccountId) {
+          req.error(400, "targetSubaccountId is required to auto-provision a missing destination service instance.");
+          return;
+        }
+        let newCredentials;
+        try {
+          newCredentials = await btpCli.ensureInstanceScopedServiceKey(sessionId, targetSubaccountId, instanceName);
+        } catch (e: unknown) {
+          req.error(500, `Could not provision destination service instance "${instanceName}" in "${targetSubaccount}": ${errorMessage(e)}`);
+          return;
+        }
+        await db.run(INSERT.into(DbInstanceKeys).entries({ sessionId, subaccountLabel: targetSubaccount, instanceName, ...newCredentials }));
+        targetInstance = { label: targetSubaccount, instanceName, ...newCredentials };
+      }
+      target = targetInstance;
+
+      fetchOne = (creds) => fetchInstanceDestinations(sourceSubaccount, instanceName, creds);
+      pushOne = pushInstanceDestination;
+    } else {
+      fetchOne = fetchDestinations;
+      pushOne = pushDestination;
+    }
+
+    const sourceResult = await fetchOne(source);
+    const dest = sourceResult.destinations.find((d: { Name: string }) => d.Name === destinationName);
+    if (!dest) {
+      req.error(404, `"${destinationName}" was not found in the source subaccount.`);
+      return;
+    }
+
     const masked = hasMaskedSensitiveField(dest);
     try {
-      await pushDestination(target, dest);
+      await pushOne(target, dest);
       await db.run(INSERT.into(DbTransportLog).entries({ sessionId, destinationName, sourceSubaccount, targetSubaccount, result: "success", detail: "" }));
       return {
         ok: true,
@@ -331,6 +394,24 @@ module.exports = cds.service.impl(async function (this: any) {
     } else {
       await db.run(INSERT.into(DbSubaccounts).entries({ sessionId, label, ...credentials }));
     }
+
+    // Persist a key for every customer-owned destination-service instance discovered alongside
+    // the subaccount-wide one, so their instance-scoped destinations can be compared too.
+    interface ProvisionedInstance {
+      name: string;
+      credentials: { tokenUrl: string; clientId: string; clientSecret: string; apiUrl: string };
+    }
+    for (const inst of (state.instances || []) as ProvisionedInstance[]) {
+      const existingInstance = await db.run(
+        SELECT.one.from(DbInstanceKeys).where({ sessionId, subaccountLabel: label, instanceName: inst.name })
+      );
+      if (existingInstance) {
+        await db.run(UPDATE(DbInstanceKeys).set(inst.credentials).where({ sessionId, subaccountLabel: label, instanceName: inst.name }));
+      } else {
+        await db.run(INSERT.into(DbInstanceKeys).entries({ sessionId, subaccountLabel: label, instanceName: inst.name, ...inst.credentials }));
+      }
+    }
+
     return { status: "success", error: null };
   });
 

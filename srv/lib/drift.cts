@@ -1,21 +1,40 @@
 import type { Destination, DriftRow, FetchDestinationsResult } from "./types.cts";
 
-/** Builds a flat drift-row list from two or more subaccounts' destination results.
- *  Each row is one (destinationName, subaccountLabel) combination — flattened this
+/** Builds a flat drift-row list from two or more subaccounts' destination results — both
+ *  subaccount-wide (instanceName undefined) and instance-scoped (instanceName set) results are
+ *  accepted together; each (instanceName, destinationName) combination is compared independently,
+ *  so a destination scoped to one Destination service instance is never confused with a
+ *  same-named one at the subaccount level or on a different instance.
+ *  Each row is one (instanceName, destinationName, subaccountLabel) combination — flattened this
  *  way because the Fiori Elements List Report needs a flat entity set to bind to. */
 function buildDriftRows(results: FetchDestinationsResult[]): DriftRow[] {
-  const labels = results.map((r) => r.label);
-  const byName = new Map<string, Map<string, Destination>>();
+  const labels = [...new Set(results.map((r) => r.label))];
+  const byScope = new Map<string, Map<string, Destination>>();
+  const scopeInstanceName = new Map<string, string>();
+
+  function scopeKey(instanceName: string | undefined, destinationName: string): string {
+    return `${instanceName ?? ""}::${destinationName}`;
+  }
+
   for (const r of results) {
     if (!r.ok) continue;
     for (const dest of r.destinations) {
-      if (!byName.has(dest.Name)) byName.set(dest.Name, new Map());
-      byName.get(dest.Name)!.set(r.label, dest);
+      const key = scopeKey(r.instanceName, dest.Name);
+      if (!byScope.has(key)) {
+        byScope.set(key, new Map());
+        scopeInstanceName.set(key, r.instanceName ?? "");
+      }
+      byScope.get(key)!.set(r.label, dest);
     }
   }
 
   const rows: DriftRow[] = [];
-  for (const [name, perLabel] of [...byName.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
+  const sortedKeys = [...byScope.keys()].sort((a, b) => a.localeCompare(b));
+  for (const key of sortedKeys) {
+    const perLabel = byScope.get(key)!;
+    const instanceName = scopeInstanceName.get(key)!;
+    const name = key.slice(instanceName.length + 2);
+
     const presentLabels = labels.filter((l) => perLabel.has(l));
     const all = [...perLabel.values()];
     const fields = new Set<string>();
@@ -32,8 +51,9 @@ function buildDriftRows(results: FetchDestinationsResult[]): DriftRow[] {
       const present = !!dest;
       const missingIn = labels.filter((l) => !perLabel.has(l));
       rows.push({
-        ID: `${name}::${label}`,
+        ID: `${instanceName}::${name}::${label}`,
         destinationName: name,
+        instanceName,
         subaccount: label,
         present,
         type: (dest?.Type as string) ?? "",

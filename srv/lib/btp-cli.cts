@@ -388,12 +388,23 @@ function findCredentials(node: unknown): BtpServiceBindingCredentials | null {
   return null;
 }
 
+/** Derives a stable, unique-enough binding name for a given destination-service instance's own key. */
+function bindingNameForInstance(instanceName: string): string {
+  return `${instanceName}-bdmkey`.slice(0, 120);
+}
+
 /**
- * Ensures a destination-service instance + binding exist for the given subaccount (idempotent:
- * reuses them if a previous run already created them), and returns the service-key credentials.
- * Runs entirely under the calling session's own `btp` CLI identity.
+ * Ensures a "destination"-offering service instance (named `instanceName`) + a binding (named
+ * `bindingName`) for it exist in the given subaccount (idempotent: reuses them if a previous run
+ * already created them), and returns the service-key credentials. Runs entirely under the calling
+ * session's own `btp` CLI identity.
  */
-async function ensureDestinationServiceKey(sessionId: string, subaccountId: string): Promise<DestinationServiceCredentials> {
+async function ensureServiceKeyForInstance(
+  sessionId: string,
+  subaccountId: string,
+  instanceName: string,
+  bindingName: string
+): Promise<DestinationServiceCredentials> {
   interface ServiceInstanceListItem {
     name: string;
   }
@@ -413,7 +424,7 @@ async function ensureDestinationServiceKey(sessionId: string, subaccountId: stri
     throw new Error(`Could not list service instances: ${errorMessage(e)}`);
   }
   const instanceRows = toArray(instances);
-  const instance = instanceRows.find((i) => i.name === INSTANCE_NAME);
+  const instance = instanceRows.find((i) => i.name === instanceName);
 
   if (!instance) {
     try {
@@ -427,7 +438,7 @@ async function ensureDestinationServiceKey(sessionId: string, subaccountId: stri
         "--plan-name",
         "lite",
         "--name",
-        INSTANCE_NAME,
+        instanceName,
         "--wait",
         "2m",
       ]);
@@ -443,7 +454,7 @@ async function ensureDestinationServiceKey(sessionId: string, subaccountId: stri
     throw new Error(`Could not list service bindings: ${errorMessage(e)}`);
   }
   const bindingRows = toArray(bindings);
-  const binding = bindingRows.find((b) => b.name === BINDING_NAME);
+  const binding = bindingRows.find((b) => b.name === bindingName);
 
   if (!binding) {
     try {
@@ -453,9 +464,9 @@ async function ensureDestinationServiceKey(sessionId: string, subaccountId: stri
         "--subaccount",
         subaccountId,
         "--name",
-        BINDING_NAME,
+        bindingName,
         "--instance-name",
-        INSTANCE_NAME,
+        instanceName,
         "--wait",
         "2m",
       ]);
@@ -466,7 +477,7 @@ async function ensureDestinationServiceKey(sessionId: string, subaccountId: stri
 
   let bindingDetail: unknown;
   try {
-    bindingDetail = await runBtpJsonAsync<unknown>(sessionId, ["get", "services/binding", "--subaccount", subaccountId, "--name", BINDING_NAME]);
+    bindingDetail = await runBtpJsonAsync<unknown>(sessionId, ["get", "services/binding", "--subaccount", subaccountId, "--name", bindingName]);
   } catch (e: unknown) {
     throw new Error(`Could not read the service binding credentials: ${errorMessage(e)}`);
   }
@@ -484,10 +495,86 @@ async function ensureDestinationServiceKey(sessionId: string, subaccountId: stri
   };
 }
 
+/** Ensures/reads the credentials for this app's own subaccount-wide monitoring instance. */
+async function ensureDestinationServiceKey(sessionId: string, subaccountId: string): Promise<DestinationServiceCredentials> {
+  return ensureServiceKeyForInstance(sessionId, subaccountId, INSTANCE_NAME, BINDING_NAME);
+}
+
+/**
+ * Ensures/reads the credentials for one specific (customer-owned) destination-service instance's
+ * own instance-scoped destinations — creating the instance itself (plan "lite") if the target
+ * subaccount doesn't have one by that name yet, e.g. when transporting into a subaccount that
+ * never had this instance provisioned.
+ */
+async function ensureInstanceScopedServiceKey(sessionId: string, subaccountId: string, instanceName: string): Promise<DestinationServiceCredentials> {
+  return ensureServiceKeyForInstance(sessionId, subaccountId, instanceName, bindingNameForInstance(instanceName));
+}
+
+interface BtpServicePlanRaw {
+  id: string;
+  service_offering_id: string;
+}
+
+interface BtpServiceOfferingRaw {
+  id: string;
+  name: string;
+}
+
+// Offering catalog metadata (plan -> offering -> name) is environment/catalog data, not
+// session- or subaccount-specific — safe to cache across all sessions for the process lifetime.
+const offeringNameByPlanId = new Map<string, string>();
+
+async function resolveOfferingName(sessionId: string, subaccountId: string, planId: string): Promise<string> {
+  const cached = offeringNameByPlanId.get(planId);
+  if (cached !== undefined) return cached;
+
+  const plan = await runBtpJsonAsync<BtpServicePlanRaw>(sessionId, ["get", "services/plan", planId, "--subaccount", subaccountId]);
+  const offering = await runBtpJsonAsync<BtpServiceOfferingRaw>(sessionId, ["get", "services/offering", plan.service_offering_id, "--subaccount", subaccountId]);
+  offeringNameByPlanId.set(planId, offering.name);
+  return offering.name;
+}
+
+/**
+ * Lists the names of every "destination"-offering service instance in a subaccount, excluding
+ * this app's own monitoring instance — these are the customer's own destination-service instances
+ * whose instance-scoped destinations should be compared alongside the subaccount-wide ones.
+ *
+ * Note: instances created via Cloud Foundry (`cf create-service`) are listed here too, but
+ * `ensureInstanceScopedServiceKey`'s `btp create services/binding` call cannot bind to them
+ * ("NotFound: service instance not found or not accessible", even by instance ID) — only
+ * `cf create-service-key` can. Those instances are silently skipped in startProvisioning rather
+ * than failing the whole subaccount; only service-manager-native instances get compared for now.
+ */
+async function listDestinationServiceInstanceNames(sessionId: string, subaccountId: string): Promise<string[]> {
+  const result = await runBtpJsonAsync<BtpListResponse<BtpServiceInstanceRaw>>(sessionId, ["list", "services/instance", "--subaccount", subaccountId]);
+  const rows = toArray(result);
+
+  const uniquePlanIds = [...new Set(rows.map((r) => r.service_plan_id).filter((id): id is string => !!id))];
+  const destinationPlanIds = new Set<string>();
+  for (const planId of uniquePlanIds) {
+    try {
+      const offeringName = await resolveOfferingName(sessionId, subaccountId, planId);
+      if (offeringName === "destination") destinationPlanIds.add(planId);
+    } catch {
+      // If we can't resolve this plan's offering, just skip it rather than failing the whole scan.
+    }
+  }
+
+  return rows.filter((r) => r.service_plan_id && destinationPlanIds.has(r.service_plan_id) && r.name !== INSTANCE_NAME).map((r) => r.name);
+}
+
+interface ProvisionedInstance {
+  name: string;
+  credentials: DestinationServiceCredentials;
+}
+
 interface ProvisioningState {
   status: "running" | "success" | "error";
   error?: string;
+  /** The subaccount-wide monitoring instance's credentials. */
   credentials?: DestinationServiceCredentials;
+  /** Every customer-owned "destination"-offering instance found in the subaccount, with its own instance-scoped credentials. */
+  instances?: ProvisionedInstance[];
 }
 
 /** Keyed by `${sessionId}::${subaccountId}` — two sessions provisioning the same subaccount never collide. */
@@ -497,7 +584,12 @@ function provisioningKey(sessionId: string, subaccountId: string): string {
   return `${sessionId}::${subaccountId}`;
 }
 
-/** Starts (or returns the existing) background provisioning job for a subaccount — never blocks the caller. */
+/**
+ * Starts (or returns the existing) background provisioning job for a subaccount — never blocks the
+ * caller. Provisions this app's own subaccount-wide monitoring instance, then discovers every other
+ * "destination"-offering instance in the subaccount and provisions a key for each of those too, so
+ * their instance-scoped destinations can be compared alongside the subaccount-wide ones.
+ */
 function startProvisioning(sessionId: string, subaccountId: string): ProvisioningState {
   const key = provisioningKey(sessionId, subaccountId);
   const existing = provisioningJobs.get(key);
@@ -506,10 +598,24 @@ function startProvisioning(sessionId: string, subaccountId: string): Provisionin
   const state: ProvisioningState = { status: "running" };
   provisioningJobs.set(key, state);
 
-  ensureDestinationServiceKey(sessionId, subaccountId)
-    .then((credentials) => {
+  (async () => {
+    const credentials = await ensureDestinationServiceKey(sessionId, subaccountId);
+    state.credentials = credentials;
+
+    const instanceNames = await listDestinationServiceInstanceNames(sessionId, subaccountId);
+    const instances: ProvisionedInstance[] = [];
+    for (const name of instanceNames) {
+      try {
+        instances.push({ name, credentials: await ensureInstanceScopedServiceKey(sessionId, subaccountId, name) });
+      } catch {
+        // Best-effort: an instance we can't bind to (e.g. a permission edge case) is skipped
+        // rather than failing the whole comparison for this subaccount.
+      }
+    }
+    state.instances = instances;
+  })()
+    .then(() => {
       state.status = "success";
-      state.credentials = credentials;
     })
     .catch((e: unknown) => {
       state.status = "error";
@@ -537,6 +643,8 @@ module.exports = {
   listSubaccounts,
   listServiceInstances,
   ensureDestinationServiceKey,
+  ensureInstanceScopedServiceKey,
+  listDestinationServiceInstanceNames,
   startProvisioning,
   getProvisioningState,
 };

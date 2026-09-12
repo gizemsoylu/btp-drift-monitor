@@ -43,6 +43,30 @@ async function fetchAllDestinations(subaccounts: Subaccount[]): Promise<FetchDes
   return Promise.all(subaccounts.map(fetchDestinations));
 }
 
+/**
+ * Fetches one Destination service instance's own (instance-scoped) destinations — distinct from
+ * the subaccount-wide list, and only visible via credentials bound to that specific instance.
+ * Never throws — returns { ok:false, error } instead.
+ */
+async function fetchInstanceDestinations(label: string, instanceName: string, creds: Subaccount): Promise<FetchDestinationsResult> {
+  try {
+    const token = await getToken(creds.tokenUrl, creds.clientId, creds.clientSecret);
+    const { data }: AxiosResponse<Destination[]> = await axios.get(
+      `${creds.apiUrl}/destination-configuration/v1/instanceDestinations`,
+      { headers: { Authorization: `Bearer ${token}` } }
+    );
+    return { label, instanceName, ok: true, destinations: data };
+  } catch (e: unknown) {
+    return { label, instanceName, ok: false, error: describeError(e), destinations: [] };
+  }
+}
+
+async function fetchAllInstanceDestinations(
+  entries: { label: string; instanceName: string; creds: Subaccount }[]
+): Promise<FetchDestinationsResult[]> {
+  return Promise.all(entries.map((e) => fetchInstanceDestinations(e.label, e.instanceName, e.creds)));
+}
+
 function hasMaskedSensitiveField(dest: Destination): boolean {
   for (const [key, value] of Object.entries(dest)) {
     if (SENSITIVE_FIELD_PATTERN.test(key)) {
@@ -69,4 +93,22 @@ async function pushDestination(target: Subaccount, destination: Destination): Pr
   );
 }
 
-module.exports = { fetchDestinations, fetchAllDestinations, hasMaskedSensitiveField, pushDestination };
+/** Same as pushDestination, but writes into one Destination service instance's own instance-scoped list. */
+async function pushInstanceDestination(target: Subaccount, destination: Destination): Promise<void> {
+  const token = await getToken(target.tokenUrl, target.clientId, target.clientSecret);
+  await axios.post(
+    `${target.apiUrl}/destination-configuration/v1/instanceDestinations`,
+    destination,
+    { headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } }
+  );
+}
+
+module.exports = {
+  fetchDestinations,
+  fetchAllDestinations,
+  fetchInstanceDestinations,
+  fetchAllInstanceDestinations,
+  hasMaskedSensitiveField,
+  pushDestination,
+  pushInstanceDestination,
+};

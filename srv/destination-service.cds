@@ -13,6 +13,7 @@ service DestinationDriftService @(path: '/odata/v4/destination-drift', impl: './
   entity DriftRows {
     key ID              : String(300);
         destinationName : String(200)  @title: '{i18n>field.destinationName}';
+        instanceName    : String(200)  @title: '{i18n>field.instanceName}';
         subaccount      : String(100)  @title: '{i18n>field.subaccount}';
         present         : Boolean      @title: '{i18n>field.present}';
         type            : String(50)   @title: '{i18n>field.type}';
@@ -49,12 +50,20 @@ service DestinationDriftService @(path: '/odata/v4/destination-drift', impl: './
     virtual null as resultCriticality : Integer
   };
 
-  /** Copies/updates a destination from the source subaccount to the target subaccount. */
+  /**
+   * Copies/updates a destination from the source subaccount to the target subaccount. When
+   * instanceName is set, the destination is instance-scoped (belongs to one Destination service
+   * instance rather than the whole subaccount) — if the target subaccount doesn't have an
+   * instance by that name yet, it is auto-provisioned first (see registerBtpSubaccountStart),
+   * which is why targetSubaccountId is required in that case.
+   */
   action transportDestination(
-    destinationName : String(200),
-    sourceSubaccount : String(100),
-    targetSubaccount : String(100),
-    confirmed        : Boolean
+    destinationName    : String(200),
+    instanceName       : String(200),
+    sourceSubaccount   : String(100),
+    targetSubaccount   : String(100),
+    targetSubaccountId : String(100),
+    confirmed          : Boolean
   ) returns {
     ok      : Boolean;
     warning : String(1000);

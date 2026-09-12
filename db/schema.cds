@@ -16,6 +16,21 @@ entity Subaccounts : cuid, managed {
   apiUrl       : String(300) not null; // service key "uri" (Destination API base url)
 }
 
+/**
+ * Credentials for one Destination service instance's own (instance-scoped) destinations —
+ * distinct from the subaccount-wide credentials in Subaccounts. One row per
+ * (session, subaccount label, instance name); auto-provisioned the same way as Subaccounts.
+ */
+entity DestinationServiceInstanceKeys : cuid, managed {
+  sessionId       : String(36)  not null; // isolates rows per browser session — see srv/lib/session.cts
+  subaccountLabel : String(100) not null; // matches Subaccounts.label for this session
+  instanceName    : String(200) not null;
+  tokenUrl        : String(300) not null;
+  clientId        : String(300) not null;
+  clientSecret    : String(500) not null;
+  apiUrl          : String(300) not null;
+}
+
 /** Persistent audit trail of transport operations. */
 entity TransportLog : cuid, managed {
   sessionId        : String(36); // isolates rows per browser session — see srv/lib/session.cts

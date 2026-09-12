@@ -74,8 +74,15 @@ cf push
 
 ## Known limitations
 
-- The `btp` CLI session currently runs as a single shared identity on the
-  server — see the isolation work in `srv/lib/session.cts` for per-browser-
-  session isolation.
+- Each browser session gets its own isolated `btp` CLI identity and DB rows
+  (see `srv/lib/session.cts`), so concurrent users never share a login.
 - `clientSecret` is stored as plain text in SQLite (fine for an internal
   tool; use a proper secret store for production-grade multi-tenant use).
+- Instance-scoped destination comparison (`srv/lib/btp-cli.cts`'s
+  `listDestinationServiceInstanceNames`) only covers destination-service
+  instances created natively via Service Manager (`btp create
+  services/instance`). Instances created via Cloud Foundry (`cf
+  create-service`) are listed but can't be bound via `btp create
+  services/binding` ("NotFound", even by instance ID) — they'd need `cf
+  create-service-key` instead, which isn't wired up yet. Such instances are
+  skipped rather than failing the whole comparison.

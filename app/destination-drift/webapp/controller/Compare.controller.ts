@@ -48,6 +48,8 @@ interface DriftCell {
 
 interface DriftPivotRow {
   destinationName: string;
+  /** Destinations tab only: empty for a subaccount-wide destination, otherwise the Destination service instance it's scoped to. */
+  instanceName?: string;
   cells: DriftCell[];
 }
 
@@ -79,6 +81,7 @@ interface BtpSubaccountOption {
 
 interface DriftRowRecord {
   destinationName: string;
+  instanceName: string;
   subaccount: string;
   present: boolean;
   type: string;
@@ -476,15 +479,23 @@ export default class Compare extends Controller {
     if (seq !== this._requestSeq) return; // a newer selection change has since superseded this request
     const flatRows = contexts.map((c) => c.getObject() as DriftRowRecord);
 
-    const byDestination = new Map<string, Map<string, DriftRowRecord>>();
+    // Group by (instanceName, destinationName) — a subaccount-wide destination is never confused
+    // with a same-named one scoped to a particular Destination service instance.
+    const byScope = new Map<string, Map<string, DriftRowRecord>>();
+    const scopeInfo = new Map<string, { destinationName: string; instanceName: string }>();
     for (const row of flatRows) {
-      if (!byDestination.has(row.destinationName)) byDestination.set(row.destinationName, new Map());
-      byDestination.get(row.destinationName)!.set(row.subaccount, row);
+      const key = `${row.instanceName}::${row.destinationName}`;
+      if (!byScope.has(key)) {
+        byScope.set(key, new Map());
+        scopeInfo.set(key, { destinationName: row.destinationName, instanceName: row.instanceName });
+      }
+      byScope.get(key)!.set(row.subaccount, row);
     }
 
-    const pivotedRows: DriftPivotRow[] = [...byDestination.entries()]
+    const pivotedRows: DriftPivotRow[] = [...byScope.entries()]
       .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([destinationName, perLabel]) => {
+      .map(([key, perLabel]) => {
+        const { destinationName, instanceName } = scopeInfo.get(key)!;
         const presentLabels = labels.filter((l) => perLabel.get(l)?.present);
         const presentRows = presentLabels.map((l) => perLabel.get(l)!);
         const allIdentical = presentRows.every((r) => COMPARED_FIELDS.every((f) => r[f] === presentRows[0][f]));
@@ -496,7 +507,7 @@ export default class Compare extends Controller {
           }
           return { subaccount: label, status: allIdentical ? "MATCH" : "DRIFT" };
         });
-        return { destinationName, cells };
+        return { destinationName, instanceName, cells };
       });
 
     (this.getView()!.getModel("compare") as JSONModel).setData({ hasSelection: true, rows: pivotedRows });
@@ -555,7 +566,7 @@ export default class Compare extends Controller {
     if (seq === this._requestSeq) MessageToast.show(bundle.getText("refreshSuccess")!);
   };
 
-  onTransportPress = async (destinationName: string, sourceLabel: string, targetLabel: string): Promise<void> => {
+  onTransportPress = async (destinationName: string, instanceName: string, sourceLabel: string, targetLabel: string): Promise<void> => {
     const bundle = this._bundle();
     const confirmed = await new Promise<boolean>((resolve) => {
       MessageBox.confirm(bundle.getText("transportConfirmMessage", [destinationName, sourceLabel, targetLabel])!, {
@@ -567,8 +578,11 @@ export default class Compare extends Controller {
     const oDataModel = this._oDataModel();
     const op = oDataModel.bindContext("/transportDestination(...)");
     op.setParameter("destinationName", destinationName);
+    op.setParameter("instanceName", instanceName || null);
     op.setParameter("sourceSubaccount", sourceLabel);
     op.setParameter("targetSubaccount", targetLabel);
+    // Only needed when the target subaccount doesn't have this instance yet and it must be auto-provisioned.
+    op.setParameter("targetSubaccountId", this._currentSelection.find((s) => s.displayName === targetLabel)?.id || null);
     op.setParameter("confirmed", true);
 
     try {
@@ -598,6 +612,7 @@ export default class Compare extends Controller {
     table.unbindItems();
     if (labels.length === 0) return;
 
+    table.addColumn(new Column({ header: new Text({ text: bundle.getText("compareColumnInstance") }) }));
     table.addColumn(new Column({ header: new Text({ text: bundle.getText("compareColumnDestination") }) }));
     for (const label of labels) {
       table.addColumn(new Column({ header: new Text({ text: label }), hAlign: "Center" }));
@@ -607,7 +622,11 @@ export default class Compare extends Controller {
       path: "compare>/rows",
       factory: (_id: string, context: Context) => {
         const row = context.getObject() as DriftPivotRow;
-        const cells: Control[] = [new Text({ text: row.destinationName })];
+        const instanceName = row.instanceName || "";
+        const cells: Control[] = [
+          new Text({ text: instanceName || bundle.getText("compareInstanceSubaccountWide") }),
+          new Text({ text: row.destinationName }),
+        ];
         for (const cell of row.cells) {
           const def = STATUS[cell.status];
           if (cell.status === "MISSING" && cell.sourceLabel) {
@@ -619,7 +638,7 @@ export default class Compare extends Controller {
                     icon: "sap-icon://shipping-status",
                     type: "Transparent",
                     tooltip: bundle.getText("transportButtonText"),
-                    press: () => this.onTransportPress(row.destinationName, cell.sourceLabel!, cell.subaccount),
+                    press: () => this.onTransportPress(row.destinationName, instanceName, cell.sourceLabel!, cell.subaccount),
                   }),
                 ],
               })

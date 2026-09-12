@@ -23,12 +23,16 @@ export interface FetchDestinationsResult {
   ok: boolean;
   error?: string;
   destinations: Destination[];
+  /** Set when these are one Destination service instance's own (instance-scoped) destinations, rather than the subaccount-wide list. */
+  instanceName?: string;
 }
 
-/** One (destinationName, subaccountLabel) row, flattened for the DriftRows list report. */
+/** One (instanceName, destinationName, subaccountLabel) row, flattened for the DriftRows list report. */
 export interface DriftRow {
   ID: string;
   destinationName: string;
+  /** Empty for a subaccount-wide destination; otherwise the Destination service instance it's scoped to. */
+  instanceName: string;
   subaccount: string;
   present: boolean;
   type: string;
