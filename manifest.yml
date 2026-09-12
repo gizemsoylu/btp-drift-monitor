@@ -5,7 +5,7 @@ applications:
     path: .
     buildpacks:
       - nodejs_buildpack
-    command: chmod +x bin/btp && npm run build:app && npx cds-serve
+    command: chmod +x bin/btp && npm run build:app && npx cds deploy && npx cds-serve
     memory: 512M
     disk_quota: 1024M
     instances: 1

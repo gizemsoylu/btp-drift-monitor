@@ -9,7 +9,7 @@
   "scripts": {
     "build:app": "node scripts/build-ui5-ts.js",
     "prestart": "npm run build:app",
-    "start": "cds-serve",
+    "start": "cds deploy && cds-serve",
     "prewatch": "npm run build:app",
     "watch": "cds watch",
     "typecheck": "tsc --noEmit && tsc --noEmit -p app/destination-drift/tsconfig.json"
